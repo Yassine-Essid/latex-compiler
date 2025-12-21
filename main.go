@@ -1,8 +1,10 @@
 package main
 
 import (
+	"archive/zip"
 	"context"
 	"encoding/base64"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -189,5 +191,63 @@ func compileHandler(c *gin.Context) {
 		return
 	}
 
-	c.FileAttachment(pdfPath, "document.pdf")
+	// 7. Create ZIP with artifacts
+	zipPath := filepath.Join(workDir, "artifacts.zip")
+	artifacts := []string{"main.pdf", "main.log", "main.toc", "main.aux"}
+
+	if err := zipFiles(zipPath, workDir, artifacts); err != nil {
+		log.Printf("Failed to zip artifacts: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create zip archive"})
+		return
+	}
+
+	c.FileAttachment(zipPath, "artifacts.zip")
+}
+
+func zipFiles(zipPath, baseDir string, files []string) error {
+	newZipFile, err := os.Create(zipPath)
+	if err != nil {
+		return err
+	}
+	defer newZipFile.Close()
+
+	zipWriter := zip.NewWriter(newZipFile)
+	defer zipWriter.Close()
+
+	for _, filename := range files {
+		filePath := filepath.Join(baseDir, filename)
+
+		// Check if file exists
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			continue // Skip missing files
+		}
+
+		fileToZip, err := os.Open(filePath)
+		if err != nil {
+			return err
+		}
+		defer fileToZip.Close()
+
+		info, err := fileToZip.Stat()
+		if err != nil {
+			return err
+		}
+
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+		header.Name = filename
+		header.Method = zip.Deflate
+
+		writer, err := zipWriter.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(writer, fileToZip)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

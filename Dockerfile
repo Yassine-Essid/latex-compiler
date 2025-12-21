@@ -21,19 +21,17 @@ FROM ubuntu:22.04
 # Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. Install TeX Live and fonts (Same as your original, but removed Python)
-RUN apt-get update && apt-get install -y \
-    texlive-full \
-    texlive-fonts-recommended \
-    texlive-fonts-extra \
+# 1. Install minimal TeX Live packages
+# Replaced texlive-full with specific packages to reduce image size
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    texlive-base \
+    texlive-latex-recommended \
     texlive-latex-extra \
-    texlive-xetex \
-    texlive-luatex \
+    texlive-fonts-recommended \
     latexmk \
     fontconfig \
     cabextract \
     xfonts-utils \
-    # We need ca-certificates so the server can make HTTPS calls if needed later
     ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*

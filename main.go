@@ -175,11 +175,16 @@ func compileHandler(c *gin.Context) {
 	}
 
 	if err != nil {
-		log.Printf("Job %s failed. Output: %s", jobID, string(output))
-		// Return the compiler log to the user so they can debug their LaTeX syntax
+		log.Printf("Job %s failed", jobID)
+
+		// Extract easy-to-read errors from the latexmk output
+		latexErrors := extractLatexErrors(string(output))
+
+		// Return the parsed errors along with the full compiler log
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Compilation failed",
-			"logs":  string(output),
+			"error":        "Compilation failed",
+			"latex_errors": latexErrors,
+			"logs":         string(output),
 		})
 		return
 	}
@@ -202,6 +207,32 @@ func compileHandler(c *gin.Context) {
 	}
 
 	c.FileAttachment(zipPath, "artifacts.zip")
+}
+
+// extractLatexErrors scans the compiler output for lines starting with "!"
+// to provide a cleaner array of error messages for the user.
+func extractLatexErrors(output string) []string {
+	var errors []string
+	lines := strings.Split(output, "\n")
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		// LaTeX errors typically start with "!"
+		if strings.HasPrefix(line, "!") {
+			errStr := line
+			// Grabbing the next line often provides useful context (e.g. file/line number)
+			if i+1 < len(lines) {
+				contextLine := strings.TrimSpace(lines[i+1])
+				if contextLine != "" && !strings.HasPrefix(contextLine, "!") {
+					errStr += " " + contextLine
+				}
+			}
+			errors = append(errors, errStr)
+		}
+	}
+	if len(errors) == 0 {
+		errors = append(errors, "Could not extract specific LaTeX errors. Please check the full logs.")
+	}
+	return errors
 }
 
 func zipFiles(zipPath, baseDir string, files []string) error {

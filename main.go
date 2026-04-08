@@ -4,13 +4,14 @@ import (
 	"archive/zip"
 	"context"
 	"encoding/base64"
+	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,8 +21,19 @@ import (
 
 var placeholderImg []byte
 
+// Regex patterns for error extraction
+var (
+	reBoxError      = regexp.MustCompile(`(Overfull|Underfull)\\s*\\hbox\s*\([^)]*\)\s*in\s*paragraph\s*at\s*lines\s*(\d+)(?:--(\d+))?`)
+	reErrorLine     = regexp.MustCompile(`^l\.(\d+)`)
+	reFileInParen   = regexp.MustCompile(`\(([^)]+\.(?:tex|sty|cls|bib|pdf|png|jpg|jpeg|eps))`)
+	reLineInFile    = regexp.MustCompile(`l\.(\d+)\s+in\s+([^\s]+)`)
+	reMissingChar   = regexp.MustCompile(`Missing character: There is no (.+?) in font`)
+	rePackageError  = regexp.MustCompile(`Package\s+(\w+)\s+Error:\s*(.+)`)
+	reLatexError    = regexp.MustCompile(`LaTeX Error:\s*(.+)`)
+	reMissingFile   = regexp.MustCompile(`(?:File|file) ['` + "`" + `](.+?)['] not found`)
+)
+
 func init() {
-	// 1x1 pixel transparent PNG
 	const base64Img = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
 	var err error
 	placeholderImg, err = base64.StdEncoding.DecodeString(base64Img)
@@ -32,8 +44,6 @@ func init() {
 
 func main() {
 	r := gin.Default()
-
-	// Set max upload size (e.g., 64MB)
 	r.MaxMultipartMemory = 64 << 20
 
 	r.GET("/health", func(c *gin.Context) {
@@ -41,13 +51,10 @@ func main() {
 	})
 
 	r.POST("/compile", compileHandler)
-
-	// Run on port 8000
 	r.Run(":8000")
 }
 
 func compileHandler(c *gin.Context) {
-	// 1. Parse Multipart Form
 	form, err := c.MultipartForm()
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to parse multipart form"})
@@ -60,11 +67,8 @@ func compileHandler(c *gin.Context) {
 		return
 	}
 
-	// 2. Create a unique workspace
 	jobID := uuid.New().String()
 	workDir := filepath.Join("/tmp", "latex", jobID)
-
-	// Ensure cleanup happens after request finishes
 	defer os.RemoveAll(workDir)
 
 	if err := os.MkdirAll(workDir, 0755); err != nil {
@@ -72,7 +76,6 @@ func compileHandler(c *gin.Context) {
 		return
 	}
 
-	// 3. Save all files
 	mainFileFound := false
 	for _, file := range files {
 		filename := filepath.Base(file.Filename)
@@ -80,7 +83,7 @@ func compileHandler(c *gin.Context) {
 			mainFileFound = true
 		}
 		if err := c.SaveUploadedFile(file, filepath.Join(workDir, filename)); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save file: " + filename})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save file"})
 			return
 		}
 	}
@@ -90,97 +93,58 @@ func compileHandler(c *gin.Context) {
 		return
 	}
 
-	// 4. Prepare compilation command (latexmk)
 	inputPath := filepath.Join(workDir, "main.tex")
-	// We use a context with timeout to prevent hanging processes
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	var output []byte
-
-	// Regex to find missing files
-	// Matches:
-	// ! LaTeX Error: File 'foo.tex' not found.
-	// ! Package pdftex.def Error: File `foo.jpg' not found.
-	// LaTeX Warning: File `foo.jpg' not found
-	reMissingFile := regexp.MustCompile(`(?:File|file) ['` + "`" + `](.+?)['] not found`)
-
 	maxRetries := 3
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		// Command: latexmk -pdf -interaction=nonstopmode -output-directory=DIR file
 		cmd := exec.CommandContext(ctx, "latexmk",
-			"-pdf",                     // Output PDF
-			"-interaction=nonstopmode", // Don't ask for user input on error
-			"-no-shell-escape",         // SECURITY: Disable \write18 system commands
+			"-pdf",
+			"-interaction=nonstopmode",
+			"-no-shell-escape",
 			"-output-directory="+workDir,
 			inputPath,
 		)
 
 		output, err = cmd.CombinedOutput()
-
-		// If success, break
-		if err == nil {
+		if err == nil || ctx.Err() == context.DeadlineExceeded {
 			break
 		}
 
-		// If context timed out, stop
-		if ctx.Err() == context.DeadlineExceeded {
-			break
-		}
-
-		// Check for missing files in output
 		matches := reMissingFile.FindAllStringSubmatch(string(output), -1)
 		if len(matches) == 0 {
-			// No missing files found, some other error
 			break
 		}
 
 		filesCreated := 0
 		for _, match := range matches {
 			missingFile := match[1]
-
-			// Ignore .tex files or other source files to prevent infinite loops or bad overwrites
 			ext := strings.ToLower(filepath.Ext(missingFile))
 			if ext == ".tex" || ext == ".sty" || ext == ".cls" || ext == ".bib" {
 				continue
 			}
-
-			// If no extension, assume it's an image and append .png (since our placeholder is png)
-			// LaTeX often reports "File 'foo' not found" for \includegraphics{foo}
 			targetPath := filepath.Join(workDir, missingFile)
 			if ext == "" {
 				targetPath += ".png"
 			}
-
-			// Create the placeholder file
 			if err := os.WriteFile(targetPath, placeholderImg, 0644); err == nil {
 				filesCreated++
-				log.Printf("Created placeholder for missing file: %s", missingFile)
 			}
 		}
-
 		if filesCreated == 0 {
-			// We found missing file errors but couldn't/shouldn't fix them (e.g. missing .tex)
 			break
 		}
-
-		// If we created files, loop again to retry compilation
 	}
 
-	// 5. Handle Errors
 	if ctx.Err() == context.DeadlineExceeded {
-		log.Printf("Job %s timed out", jobID)
 		c.JSON(http.StatusRequestTimeout, gin.H{"error": "Compilation timed out"})
 		return
 	}
 
 	if err != nil {
-		log.Printf("Job %s failed", jobID)
-
-		// Extract easy-to-read errors from the latexmk output
 		latexErrors := extractLatexErrors(string(output))
-
-		// Return the parsed errors along with the full compiler log
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":        "Compilation failed",
 			"latex_errors": latexErrors,
@@ -189,50 +153,138 @@ func compileHandler(c *gin.Context) {
 		return
 	}
 
-	// 6. Return the PDF
-	pdfPath := filepath.Join(workDir, "main.pdf")
-	if _, err := os.Stat(pdfPath); os.IsNotExist(err) {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "PDF was not generated despite successful exit code"})
-		return
-	}
-
-	// 7. Create ZIP with artifacts
 	zipPath := filepath.Join(workDir, "artifacts.zip")
 	artifacts := []string{"main.pdf", "main.log", "main.toc", "main.aux"}
 
 	if err := zipFiles(zipPath, workDir, artifacts); err != nil {
-		log.Printf("Failed to zip artifacts: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create zip archive"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create zip"})
 		return
 	}
 
 	c.FileAttachment(zipPath, "artifacts.zip")
 }
 
-// extractLatexErrors scans the compiler output for lines starting with "!"
-// to provide a cleaner array of error messages for the user.
-func extractLatexErrors(output string) []string {
-	var errors []string
+type LaTeXError struct {
+	Type    string `json:"type"`
+	File    string `json:"file"`
+	Line    int    `json:"line"`
+	Message string `json:"message"`
+	Context string `json:"context"`
+}
+
+func extractLatexErrors(output string) []LaTeXError {
+	var errors []LaTeXError
 	lines := strings.Split(output, "\n")
-	for i := 0; i < len(lines); i++ {
+	totalLines := len(lines)
+
+	currentParsingFile := "main.tex" // Default
+
+	for i := 0; i < totalLines; i++ {
 		line := strings.TrimSpace(lines[i])
-		// LaTeX errors typically start with "!"
+		if line == "" {
+			continue
+		}
+
+		// Track current file context
+		if strings.HasPrefix(line, "(") {
+			if matches := reFileInParen.FindStringSubmatch(line); len(matches) > 1 {
+				currentParsingFile = extractFileName(matches[1])
+			}
+		}
+
+		// Detect standard LaTeX Error block
 		if strings.HasPrefix(line, "!") {
-			errStr := line
-			// Grabbing the next line often provides useful context (e.g. file/line number)
-			if i+1 < len(lines) {
-				contextLine := strings.TrimSpace(lines[i+1])
-				if contextLine != "" && !strings.HasPrefix(contextLine, "!") {
-					errStr += " " + contextLine
+			// Skip generic fatal messages that aren't specific errors
+			if strings.Contains(line, "==> Fatal error") || strings.Contains(line, "Emergency stop") {
+				continue
+			}
+
+			newErr := LaTeXError{
+				Type:    "error",
+				Line:    -1,
+				File:    currentParsingFile,
+				Message: strings.TrimSpace(strings.TrimPrefix(line, "!")),
+				Context: line,
+			}
+
+			// Look ahead for the line number (extended to handle errors with help text)
+			for j := i + 1; j < i+16 && j < totalLines; j++ {
+				next := strings.TrimSpace(lines[j])
+				
+				// Case 1: Standard l.XX
+				if matches := reErrorLine.FindStringSubmatch(next); len(matches) > 1 {
+					if ln, err := strconv.Atoi(matches[1]); err == nil {
+						newErr.Line = ln
+						newErr.Context += "\n" + next
+						break 
+					}
+				}
+				// Case 2: Package specific l.XX in file
+				if matches := reLineInFile.FindStringSubmatch(next); len(matches) > 2 {
+					ln, _ := strconv.Atoi(matches[1])
+					newErr.Line = ln
+					newErr.File = extractFileName(matches[2])
+					newErr.Context += "\n" + next
+					break
+				}
+				
+				if next != "" {
+					newErr.Context += "\n" + next
 				}
 			}
-			errors = append(errors, errStr)
+
+			// Specific cleanups for messages
+			if strings.Contains(newErr.Message, "LaTeX Error:") {
+				if m := reLatexError.FindStringSubmatch(newErr.Message); len(m) > 1 {
+					newErr.Message = m[1]
+				}
+			}
+
+			errors = append(errors, newErr)
+			continue
+		}
+
+		// Handle Overfull/Underfull boxes
+		if matches := reBoxError.FindStringSubmatch(line); len(matches) > 0 {
+			startLine, _ := strconv.Atoi(matches[2])
+			errors = append(errors, LaTeXError{
+				Type:    "warning",
+				Line:    startLine,
+				File:    currentParsingFile,
+				Message: line,
+				Context: line,
+			})
 		}
 	}
+
+	// Fallback if compilation failed but no '!' errors were caught
 	if len(errors) == 0 {
-		errors = append(errors, "Could not extract specific LaTeX errors. Please check the full logs.")
+		errors = append(errors, LaTeXError{
+			Type:    "error",
+			Line:    -1,
+			Message: "Compilation failed. Check logs for details.",
+		})
 	}
-	return errors
+
+	return deduplicateErrors(errors)
+}
+
+func extractFileName(path string) string {
+	path = strings.Trim(path, "() \t\n\r")
+	return filepath.Base(path)
+}
+
+func deduplicateErrors(errs []LaTeXError) []LaTeXError {
+	unique := []LaTeXError{}
+	seen := make(map[string]bool)
+	for _, e := range errs {
+		key := fmt.Sprintf("%s:%d:%s", e.File, e.Line, e.Message)
+		if !seen[key] {
+			seen[key] = true
+			unique = append(unique, e)
+		}
+	}
+	return unique
 }
 
 func zipFiles(zipPath, baseDir string, files []string) error {
@@ -247,38 +299,23 @@ func zipFiles(zipPath, baseDir string, files []string) error {
 
 	for _, filename := range files {
 		filePath := filepath.Join(baseDir, filename)
-
-		// Check if file exists
 		if _, err := os.Stat(filePath); os.IsNotExist(err) {
-			continue // Skip missing files
+			continue
 		}
 
 		fileToZip, err := os.Open(filePath)
 		if err != nil {
 			return err
 		}
-		defer fileToZip.Close()
-
-		info, err := fileToZip.Stat()
-		if err != nil {
-			return err
-		}
-
-		header, err := zip.FileInfoHeader(info)
-		if err != nil {
-			return err
-		}
+		
+		info, _ := fileToZip.Stat()
+		header, _ := zip.FileInfoHeader(info)
 		header.Name = filename
 		header.Method = zip.Deflate
 
-		writer, err := zipWriter.CreateHeader(header)
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(writer, fileToZip)
-		if err != nil {
-			return err
-		}
+		writer, _ := zipWriter.CreateHeader(header)
+		io.Copy(writer, fileToZip)
+		fileToZip.Close()
 	}
 	return nil
 }

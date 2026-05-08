@@ -1,35 +1,32 @@
-\documentclass[12pt]{article}
-\usepackage[utf8]{inputenc}
+\documentclass{article}
 \usepackage{graphicx}
-\usepackage{lipsum}
-\usepackage{booktabs}
-\usepackage{longtable}
-\usepackage{geometry}
-\usepackage{hyperref}
+\usepackage{amsmath}
 
-\geometry{a4paper, margin=1in}
-
-\title{Comprehensive Multi-File LaTeX Project}
-\author{Test User}
+\title{Test Document}
+\author{Test}
 \date{\today}
 
 \begin{document}
 
 \maketitle
-
-\begin{abstract}
-This document serves as a comprehensive test for the LaTeX compilation server. It includes multiple chapters, extensive text generation to simulate a large document (approximately 20 pages), complex tables, figures, and a table of contents. The purpose is to verify the robustness of the compilation process, including handling of multiple files and missing resources.
-\end{abstract}
-
-\newpage
 \tableofcontents
-\newpage
-\listoftables
-\listoffigures
-\newpage
 
-\input{chapter1}
-\newpage
-\input{chapter2}
+\section{Introduction}
+This is a test document for the LaTeX compiler service.
+
+\input{intro}
+
+\section{Math}
+\begin{equation}
+E = mc^2
+\end{equation}
+
+\section{Image}
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.5\textwidth]{sample.svg}
+  \caption{A placeholder image}
+  \label{fig:sample}
+\end{figure}
 
 \end{document}

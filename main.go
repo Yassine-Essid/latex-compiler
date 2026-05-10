@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -43,9 +44,21 @@ func compileHandler(c *gin.Context) {
 		return
 	}
 
-	convertSVGFiles(ws.dir)
+	// Run preprocessing steps - patchIncludeSVG must run first,
+	// then SVG conversion and asset seeding can run in parallel
 	patchIncludeSVG(ws.dir)
-	preSeedMissingAssets(ws.dir)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		convertSVGFiles(ws.dir)
+	}()
+	go func() {
+		defer wg.Done()
+		preSeedMissingAssets(ws.dir)
+	}()
+	wg.Wait()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

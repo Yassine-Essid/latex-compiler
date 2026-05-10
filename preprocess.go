@@ -8,32 +8,51 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
+// convertSVGFiles converts all SVG files to PDF in parallel
 func convertSVGFiles(workDir string) []string {
-	var warnings []string
-
-	err := filepath.Walk(workDir, func(path string, info os.FileInfo, err error) error {
+	// First, collect all SVG files
+	var svgFiles []string
+	filepath.Walk(workDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return err
 		}
-		if !strings.EqualFold(filepath.Ext(path), ".svg") {
-			return nil
-		}
-
-		pdfPath := path[:len(path)-len(filepath.Ext(path))] + ".pdf"
-		cmd := exec.Command("rsvg-convert", "--format=pdf", "--output="+pdfPath, path)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			warnings = append(warnings,
-				fmt.Sprintf("SVG->PDF failed for %s: %s", filepath.Base(path), strings.TrimSpace(string(out))),
-			)
+		if strings.EqualFold(filepath.Ext(path), ".svg") {
+			svgFiles = append(svgFiles, path)
 		}
 		return nil
 	})
 
-	if err != nil {
-		warnings = append(warnings, fmt.Sprintf("SVG walk error: %v", err))
+	if len(svgFiles) == 0 {
+		return nil
 	}
+
+	// Convert all SVGs in parallel
+	var (
+		warnings []string
+		mu       sync.Mutex
+		wg       sync.WaitGroup
+	)
+
+	for _, svgPath := range svgFiles {
+		wg.Add(1)
+		go func(path string) {
+			defer wg.Done()
+			pdfPath := path[:len(path)-len(filepath.Ext(path))] + ".pdf"
+			cmd := exec.Command("rsvg-convert", "--format=pdf", "--output="+pdfPath, path)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				mu.Lock()
+				warnings = append(warnings,
+					fmt.Sprintf("SVG->PDF failed for %s: %s", filepath.Base(path), strings.TrimSpace(string(out))),
+				)
+				mu.Unlock()
+			}
+		}(svgPath)
+	}
+
+	wg.Wait()
 	return warnings
 }
 

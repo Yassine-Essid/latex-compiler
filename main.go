@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -56,13 +58,18 @@ func compileHandler(c *gin.Context) {
 	}
 
 	if compileErr != nil {
-		errs := extractErrors(string(output), ws.dir)
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":        "Compilation failed",
-			"latex_errors": errs,
-			"logs":         string(output),
-		})
-		return
+		pdfPath := filepath.Join(ws.dir, "main.pdf")
+		if _, statErr := os.Stat(pdfPath); statErr == nil {
+			compileErr = nil
+		} else {
+			errs := extractErrors(string(output), ws.dir)
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":        "Compilation failed",
+				"latex_errors": errs,
+				"logs":         string(output),
+			})
+			return
+		}
 	}
 
 	zipPath, err := createZip(ws.dir, []string{"main.pdf", "main.log", "main.toc", "main.aux"})

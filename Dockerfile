@@ -13,15 +13,24 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    texlive-base \
-    texlive-latex-recommended \
-    texlive-latex-extra \
-    texlive-fonts-recommended \
-    texlive-science \
-    texlive-bibtex-extra \
+    texlive-full \
     latexmk \
+    biber \
+    xindy \
+    ghostscript \
+    poppler-utils \
     librsvg2-bin \
     fontconfig \
+    lmodern \
+    cm-super \
+    fonts-dejavu \
+    fonts-liberation \
+    fonts-freefont-otf \
+    fonts-noto \
+    fonts-noto-cjk \
+    fonts-noto-color-emoji \
+    fonts-texgyre \
+    fonts-hosny-amiri \
     cabextract \
     xfonts-utils \
     ca-certificates \

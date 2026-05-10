@@ -4,44 +4,25 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
-	"strings"
 )
 
 func compile(ctx context.Context, workDir string) ([]byte, error) {
 	inputPath := filepath.Join(workDir, "main.tex")
 
-	output, err := runPdfLatex(ctx, workDir, inputPath)
-
-	if err != nil {
-		outputStr := string(output)
-		if strings.Contains(outputStr, "Rerun to get") ||
-			strings.Contains(outputStr, "Label(s) may have changed") ||
-			strings.Contains(outputStr, "rerunfilecheck") {
-			output, err = runPdfLatex(ctx, workDir, inputPath)
-		}
+	// Run 3 passes to ensure auxiliary files (.toc, .aux, .lof, .lot) are stable.
+	// Pass 1: Initial compilation - generates auxiliary files
+	// Pass 2: Incorporates auxiliary file content into the document
+	// Pass 3: Stabilizes page numbers and cross-references
+	for i := 0; i < 2; i++ {
+		runXeLatex(ctx, workDir, inputPath)
 	}
 
-	if err != nil && !strings.Contains(string(output), "==> Fatal error") {
-		output, err = runLatexMk(ctx, workDir, inputPath)
-	}
-
-	return output, err
+	// Final pass - return its output and error
+	return runXeLatex(ctx, workDir, inputPath)
 }
 
-func runPdfLatex(ctx context.Context, workDir, inputPath string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "pdflatex",
-		"-interaction=nonstopmode",
-		"-no-shell-escape",
-		"-output-directory="+workDir,
-		inputPath,
-	)
-	cmd.Dir = workDir
-	return cmd.CombinedOutput()
-}
-
-func runLatexMk(ctx context.Context, workDir, inputPath string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "latexmk",
-		"-pdf",
+func runXeLatex(ctx context.Context, workDir, inputPath string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "xelatex",
 		"-interaction=nonstopmode",
 		"-no-shell-escape",
 		"-output-directory="+workDir,

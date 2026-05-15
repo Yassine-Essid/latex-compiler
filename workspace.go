@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"mime"
 	"mime/multipart"
 	"os"
 	"path/filepath"
@@ -52,7 +53,15 @@ func saveUploadedFiles(c *gin.Context, ws *workspace) error {
 		go func(f *multipart.FileHeader) {
 			defer wg.Done()
 
-			destPath, err := sanitizePath(ws.dir, f.Filename)
+			// Go's multipart package natively calls filepath.Base() on f.Filename for security.
+			// To support nested folders, we must extract the original "filename" from the header.
+			_, params, err := mime.ParseMediaType(f.Header.Get("Content-Disposition"))
+			originalFilename := f.Filename
+			if err == nil && params["filename"] != "" {
+				originalFilename = params["filename"]
+			}
+
+			destPath, err := sanitizePath(ws.dir, originalFilename)
 			if err != nil {
 				mu.Lock()
 				if saveErr == nil {

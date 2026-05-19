@@ -75,6 +75,7 @@ func runXeLatex(ctx context.Context, workDir, inputPath string) ([]byte, error) 
 	cmd := exec.CommandContext(ctx, "xelatex",
 		"-interaction=nonstopmode",
 		"-no-shell-escape",
+		"-synctex=1",
 		"-output-directory="+workDir,
 		inputPath,
 	)

@@ -109,7 +109,7 @@ func compileHandler(c *gin.Context) {
 		}
 	}
 
-	zipPath, err := createZip(ws.dir, []string{"main.pdf", "main.log", "main.toc", "main.aux"})
+	zipPath, err := createZip(ws.dir, []string{"main.pdf", "main.synctex.gz", "main.log", "main.toc", "main.aux"})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create zip"})
 		return

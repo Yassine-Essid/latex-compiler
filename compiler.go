@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,7 +50,19 @@ func compile(ctx context.Context, workDir string) ([]byte, error) {
 	if needsMultiplePasses(workDir) {
 		// Intermediate pass WITHOUT PDF generation - much faster
 		// This generates .aux, .toc, .lof, .lot files needed for cross-references
-		runXeLatexNoPDF(ctx, workDir, inputPath)
+		if out, err := runXeLatexNoPDF(ctx, workDir, inputPath); err != nil {
+			log.Printf("Draft xelatex pass: %s", out)
+		}
+
+		if needsBiber(workDir) {
+			if out, err := runBiber(ctx, workDir); err != nil {
+				log.Printf("Biber pass: %s", out)
+			}
+		} else if needsBibTeX(workDir) {
+			if out, err := runBibTeX(ctx, workDir); err != nil {
+				log.Printf("BibTeX pass: %s", out)
+			}
+		}
 	}
 
 	// Final pass WITH PDF generation
@@ -79,6 +92,42 @@ func runXeLatex(ctx context.Context, workDir, inputPath string) ([]byte, error) 
 		"-output-directory="+workDir,
 		inputPath,
 	)
+	cmd.Dir = workDir
+	return cmd.CombinedOutput()
+}
+
+// needsBiber returns true when the document uses biblatex with the biber backend (default)
+func needsBiber(workDir string) bool {
+	content, err := os.ReadFile(filepath.Join(workDir, "main.tex"))
+	if err != nil {
+		return false
+	}
+	text := string(content)
+	return strings.Contains(text, "biblatex") && !strings.Contains(text, "backend=bibtex")
+}
+
+// needsBibTeX returns true when the document uses classic BibTeX (\bibliography{}) without biblatex
+func needsBibTeX(workDir string) bool {
+	content, err := os.ReadFile(filepath.Join(workDir, "main.tex"))
+	if err != nil {
+		return false
+	}
+	text := string(content)
+	return strings.Contains(text, `\bibliography{`) && !strings.Contains(text, "biblatex")
+}
+
+func runBiber(ctx context.Context, workDir string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "biber",
+		"--input-directory="+workDir,
+		"--output-directory="+workDir,
+		"main",
+	)
+	cmd.Dir = workDir
+	return cmd.CombinedOutput()
+}
+
+func runBibTeX(ctx context.Context, workDir string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "bibtex", "main")
 	cmd.Dir = workDir
 	return cmd.CombinedOutput()
 }

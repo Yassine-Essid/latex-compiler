@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -29,17 +30,22 @@ func convertSVGFiles(workDir string) []string {
 		return nil
 	}
 
-	// Convert all SVGs in parallel
+	// Convert all SVGs in parallel, bounded to NumCPU workers
 	var (
 		warnings []string
 		mu       sync.Mutex
 		wg       sync.WaitGroup
 	)
+	sem := make(chan struct{}, runtime.NumCPU())
 
 	for _, svgPath := range svgFiles {
 		wg.Add(1)
 		go func(path string) {
-			defer wg.Done()
+			sem <- struct{}{}
+			defer func() {
+				<-sem
+				wg.Done()
+			}()
 			pdfPath := path[:len(path)-len(filepath.Ext(path))] + ".pdf"
 			cmd := exec.Command("rsvg-convert", "--format=pdf", "--output="+pdfPath, path)
 			if out, err := cmd.CombinedOutput(); err != nil {
@@ -84,6 +90,8 @@ func patchIncludeSVG(workDir string) error {
 
 func preSeedMissingAssets(workDir string) error {
 	existing := make(map[string]bool)
+	var texFiles []string
+
 	filepath.Walk(workDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return nil
@@ -91,34 +99,43 @@ func preSeedMissingAssets(workDir string) error {
 		rel, _ := filepath.Rel(workDir, path)
 		existing[strings.ToLower(rel)] = true
 		existing[strings.ToLower(filepath.Base(path))] = true
+		if strings.HasSuffix(strings.ToLower(path), ".tex") {
+			texFiles = append(texFiles, path)
+		}
 		return nil
 	})
 
-	mainTex, err := os.ReadFile(filepath.Join(workDir, "main.tex"))
-	if err != nil {
-		return err
-	}
-
 	reInclude := regexp.MustCompile(`\\includegraphics(?:\[.*?\])?\{([^}]+)\}`)
-	for _, match := range reInclude.FindAllStringSubmatch(string(mainTex), -1) {
-		ref := match[1]
-		found := false
-		for _, ext := range []string{"", ".png", ".jpg", ".jpeg", ".pdf", ".eps", ".svg"} {
-			if existing[strings.ToLower(ref+ext)] {
-				found = true
-				break
-			}
+
+	for _, texPath := range texFiles {
+		content, err := os.ReadFile(texPath)
+		if err != nil {
+			continue
 		}
-		if !found {
-			target := filepath.Join(workDir, ref)
-			if filepath.Ext(ref) == "" {
-				target += ".png"
+		for _, match := range reInclude.FindAllStringSubmatch(string(content), -1) {
+			ref := match[1]
+			found := false
+			for _, ext := range []string{"", ".png", ".jpg", ".jpeg", ".pdf", ".eps", ".svg"} {
+				if existing[strings.ToLower(ref+ext)] {
+					found = true
+					break
+				}
 			}
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				return err
-			}
-			if err := os.WriteFile(target, placeholderImg, 0644); err != nil {
-				return err
+			if !found {
+				target := filepath.Join(workDir, ref)
+				if filepath.Ext(ref) == "" {
+					target += ".png"
+				}
+				if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+					return err
+				}
+				if err := os.WriteFile(target, placeholderImg, 0644); err != nil {
+					return err
+				}
+				// Mark as existing so sibling tex files don't re-seed the same placeholder
+				rel, _ := filepath.Rel(workDir, target)
+				existing[strings.ToLower(rel)] = true
+				existing[strings.ToLower(filepath.Base(target))] = true
 			}
 		}
 	}

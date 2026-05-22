@@ -52,14 +52,16 @@ func compileHandler(c *gin.Context) {
 		return
 	}
 
-	log.Printf("Uploads saved successfully. Directory structure of %s:\n", ws.dir)
-	filepath.Walk(ws.dir, func(path string, info os.FileInfo, err error) error {
-		if err == nil {
-			rel, _ := filepath.Rel(ws.dir, path)
-			log.Printf("  - %s (IsDir: %v, Size: %d)\n", rel, info.IsDir(), info.Size())
-		}
-		return nil
-	})
+	log.Printf("Uploads saved to %s\n", ws.dir)
+	if os.Getenv("DEBUG") != "" {
+		filepath.Walk(ws.dir, func(path string, info os.FileInfo, err error) error {
+			if err == nil {
+				rel, _ := filepath.Rel(ws.dir, path)
+				log.Printf("  - %s (IsDir: %v, Size: %d)\n", rel, info.IsDir(), info.Size())
+			}
+			return nil
+		})
+	}
 
 	log.Println("Running preprocessing steps...")
 	// Run preprocessing steps - patchIncludeSVG must run first,
@@ -79,7 +81,13 @@ func compileHandler(c *gin.Context) {
 	wg.Wait()
 
 	log.Println("Starting LaTeX compilation...")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	timeout := 60 * time.Second
+	if v := os.Getenv("COMPILE_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			timeout = d
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	output, compileErr := compile(ctx, ws.dir)

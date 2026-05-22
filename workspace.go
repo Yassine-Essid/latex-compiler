@@ -6,6 +6,7 @@ import (
 	"mime/multipart"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -47,11 +48,16 @@ func saveUploadedFiles(c *gin.Context, ws *workspace) error {
 		wg            sync.WaitGroup
 		mainFileFound bool
 	)
+	sem := make(chan struct{}, runtime.NumCPU())
 
 	for _, file := range files {
 		wg.Add(1)
 		go func(f *multipart.FileHeader) {
-			defer wg.Done()
+			sem <- struct{}{}
+			defer func() {
+				<-sem
+				wg.Done()
+			}()
 
 			// Go's multipart package natively calls filepath.Base() on f.Filename for security.
 			// To support nested folders, we must extract the original "filename" from the header.

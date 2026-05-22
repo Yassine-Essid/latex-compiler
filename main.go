@@ -94,19 +94,17 @@ func compileHandler(c *gin.Context) {
 
 	if ctx.Err() == context.DeadlineExceeded {
 		log.Println("Compilation timed out")
-		c.JSON(http.StatusRequestTimeout, gin.H{"error": "Compilation timed out after 60s"})
+		c.JSON(http.StatusRequestTimeout, gin.H{"error": "Compilation timed out after " + timeout.String()})
 		return
 	}
-
-	log.Printf("Compilation finished. Errors encountered: %v\n", compileErr != nil)
 
 	if compileErr != nil {
 		pdfPath := filepath.Join(ws.dir, "main.pdf")
 		if _, statErr := os.Stat(pdfPath); statErr == nil {
-			log.Println("main.pdf was generated despite compilation errors. Treating as success.")
+			log.Println("Compilation finished. PDF generated with warnings (non-fatal xelatex errors ignored).")
 			compileErr = nil
 		} else {
-			log.Println("Compilation failed and no main.pdf was found.")
+			log.Println("Compilation failed. No main.pdf produced.")
 			errs := extractErrors(string(output), ws.dir)
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":        "Compilation failed",
@@ -115,6 +113,8 @@ func compileHandler(c *gin.Context) {
 			})
 			return
 		}
+	} else {
+		log.Println("Compilation finished successfully.")
 	}
 
 	zipPath, err := createZip(ws.dir, []string{"main.pdf", "main.synctex.gz", "main.log", "main.toc", "main.aux"})

@@ -7,7 +7,7 @@ WORKDIR /app
 COPY go.mod go.sum* ./
 RUN go mod download
 
-COPY *.go .
+COPY *.go ./
 RUN CGO_ENABLED=0 GOOS=linux go build -o latex-server .
 
 # --- Stage 2: Runtime (based on pre-built TeX base image) ---
